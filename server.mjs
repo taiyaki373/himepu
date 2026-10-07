@@ -9,7 +9,7 @@ const rooms = new Map();
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
 const FIELD_LIMIT = 1000;
 const knightWeapons = {
-  sword: { name: '剣士', weapon: 'sword', reach: 320, halfAngle: Math.PI/4, cooldown: 720, damage: 42, melee: true },
+  sword: { name: '剣士', weapon: 'sword', reach: 320, halfAngle: Math.PI/4, lateral: 200, cooldown: 720, damage: 42, melee: true },
   archer: { name: '弓兵', weapon: 'arrow', range: 820, cooldown: 600, speed: 1000, damage: 28 },
   mage: { name: '魔導士', weapon: 'orb', range: 760, cooldown: 3000, speed: 420, damage: 58, splash: 70, mpCost: 25, mpRegen: 8 },
   lancer: { name: '槍兵', weapon: 'spear', reach: 470, lateral: 42, cooldown: 860, damage: 38, melee: true },
@@ -19,6 +19,13 @@ function enemyDamageMultiplier(enemy, melee) {
   if (enemy.type === 'bulwark') return melee ? 1.6 : 0.55;
   if (enemy.type === 'shade') return melee ? 0.55 : 1.6;
   return 1;
+}
+
+function enemyHitRadius(enemy) { return Math.max(1, enemy.radius||11); }
+function segmentDistance(x1,y1,x2,y2,px,py) {
+  const dx=x2-x1,dy=y2-y1,lengthSquared=dx*dx+dy*dy;
+  const t=lengthSquared?Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/lengthSquared)):0;
+  return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
 }
 
 const http = createServer(async (req, res) => {
@@ -188,8 +195,9 @@ function tick(room, now) {
     const targets=room.enemies.filter(e=>{
       if(e.hp<=1)return false;
       const tx=e.x-p.x,ty=e.y-p.y,d=Math.hypot(tx,ty)||1;
-      if(p.knightType==='sword')return d<=weapon.reach&&(tx*p.facingX+ty*p.facingY)/d>=Math.cos(weapon.halfAngle);
-      if(p.knightType==='lancer'){const forward=tx*p.facingX+ty*p.facingY,lateral=Math.abs(tx*p.facingY-ty*p.facingX);return forward>0&&forward<=weapon.reach&&lateral<=weapon.lateral;}
+      const hitRadius=enemyHitRadius(e),lateral=Math.abs(tx*p.facingY-ty*p.facingX);
+      if(p.knightType==='sword'){const angleAllowance=Math.asin(Math.min(1,hitRadius/d));return d<=weapon.reach+hitRadius&&(tx*p.facingX+ty*p.facingY)/d>=Math.cos(weapon.halfAngle+angleAllowance)&&lateral<=weapon.lateral+hitRadius;}
+      if(p.knightType==='lancer'){const forward=tx*p.facingX+ty*p.facingY;return forward>-hitRadius&&forward<=weapon.reach+hitRadius&&lateral<=weapon.lateral+hitRadius;}
       return d<=weapon.range;
     }).sort((a,b)=>Math.hypot(a.x-p.x,a.y-p.y)-Math.hypot(b.x-p.x,b.y-p.y));
     const target=targets[0];
@@ -228,7 +236,7 @@ function tick(room, now) {
   }
   const shots=[];
   for(const shot of room.projectiles){shot.px=shot.x;shot.py=shot.y;if(shot.homing){let target=room.enemies.find(e=>e.id===shot.targetId&&e.hp>1);if(!target)target=room.enemies.filter(e=>e.hp>1).sort((a,b)=>Math.hypot(a.x-shot.x,a.y-shot.y)-Math.hypot(b.x-shot.x,b.y-shot.y))[0];if(target){shot.targetId=target.id;const dx=target.x-shot.x,dy=target.y-shot.y,d=Math.hypot(dx,dy)||1;shot.vx=dx/d*knightWeapons.mage.speed;shot.vy=dy/d*knightWeapons.mage.speed;}}shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;
-    const target=room.enemies.find(e=>Math.hypot(e.x-shot.x,e.y-shot.y)<(e.radius||11)+6);
+    const target=room.enemies.find(e=>segmentDistance(shot.px,shot.py,shot.x,shot.y,e.x,e.y)<=enemyHitRadius(e));
     if(target){const hits=shot.splash?room.enemies.filter(e=>Math.hypot(e.x-target.x,e.y-target.y)<shot.splash):[target];
       if(shot.weapon==='orb')room.effects.push({x:target.x,y:target.y,createdAt:now,duration:360,radius:shot.splash});
       for(const enemy of hits){const damage=shot.damage*enemyDamageMultiplier(enemy,shot.weapon==='sword'||shot.weapon==='spear');if(shot.role==='princess')enemy.hp-=damage;else enemy.hp=Math.max(1,enemy.hp-damage);
