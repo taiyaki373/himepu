@@ -34,7 +34,7 @@ const http = createServer(async (req, res) => {
 });
 
 function send(peer, message) {
-  if (peer.destroyed || peer.writableEnded || !peer.writable) return;
+  if (!peer || peer.destroyed || peer.writableEnded || !peer.writable) return;
   const data = Buffer.from(JSON.stringify(message));
   let header;
   if (data.length < 126) header = Buffer.from([0x81, data.length]);
@@ -45,11 +45,14 @@ function send(peer, message) {
 
 function snapshot(room) {
   const now = Date.now();
-  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, mp: p.mp, maxMp: p.maxMp, mpCost: knightWeapons[p.knightType]?.mpCost||0, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), attackFlashUntil: p.attackFlashUntil||0, attackAxis: p.attackAxis||null, attackFacingX: Number.isFinite(p.attackFacingX)?p.attackFacingX:(Number.isFinite(p.facingX)?p.facingX:1), attackFacingY: Number.isFinite(p.attackFacingY)?p.attackFacingY:(Number.isFinite(p.facingY)?p.facingY:0), facingX: Number.isFinite(p.facingX)?p.facingX:1, facingY: Number.isFinite(p.facingY)?p.facingY:0, aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, effects: room.effects, message: room.message };
+  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, isBot: !!p.isBot, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, mp: p.mp, maxMp: p.maxMp, mpCost: knightWeapons[p.knightType]?.mpCost||0, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), attackFlashUntil: p.attackFlashUntil||0, attackAxis: p.attackAxis||null, attackFacingX: Number.isFinite(p.attackFacingX)?p.attackFacingX:(Number.isFinite(p.facingX)?p.facingX:1), attackFacingY: Number.isFinite(p.attackFacingY)?p.attackFacingY:(Number.isFinite(p.facingY)?p.facingY:0), facingX: Number.isFinite(p.facingX)?p.facingX:1, facingY: Number.isFinite(p.facingY)?p.facingY:0, aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, effects: room.effects, message: room.message };
 }
 function broadcast(room) { const state = snapshot(room); for (const p of room.players.values()) send(p.peer, state); }
 function announce(room, message) { room.message = message; }
 function makeRoom(code) { return { code, players: new Map(), enemies: [], projectiles: [], enemyShots: [], xpOrbs: [], effects: [], phase: 'lobby', wave: 0, waveTime: 0, waveStartedAt: 0, buffUntil: 0, buffCooldownUntil: 0, buffDurationMultiplier: 1, knightXpMultiplier: 1, knightDamageMultiplier: 1, bossSpawned: false, message: '仲間を待っています', lastSpawn: 0, lastTick: Date.now(), seq: 0, projectileSeq: 0, enemyShotSeq: 0, orbSeq: 0 }; }
+function makeKnight({ id, peer = null, name, knightType = 'archer', isBot = false }) {
+  return { id, peer, name, role: 'knight', knightType, isBot, x: 0, y: 0, facingX: 1, facingY: 0, hp: 100, maxHp: 100, mp: 100, maxMp: 100, lastAttack: 0, disabledUntil: 0, buffCooldownUntil: 0, input: { aimX: 1, aimY: 0 }, xp: 0, nextXp: 3, level: 1, pendingUpgrade: false, attackPower: 1, attackSpeed: 1, moveSpeed: 1 };
+}
 function addPlayer(peer, msg, room) {
   const code = String(msg.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
   if (!/^[A-Z0-9]{4,8}$/.test(code)) return send(peer, { type: 'error', text: '部屋コードは4〜8文字で入力してください' });
@@ -58,11 +61,26 @@ function addPlayer(peer, msg, room) {
   const id = Math.random().toString(36).slice(2, 9);
   const role = room.players.size === 0 ? 'princess' : 'knight';
   const knightType = Object.hasOwn(knightWeapons, msg.knightType) ? msg.knightType : 'archer';
-  const player = { id, peer, name: String(msg.name || 'プレイヤー').slice(0, 12), role, knightType, x: 0, y: 0, facingX: 1, facingY: 0, hp: 100, maxHp: 100, mp: 100, maxMp: 100, lastAttack: 0, disabledUntil: 0, buffCooldownUntil: 0, input: { aimX: 1, aimY: 0 }, xp: 0, nextXp: 3, level: 1, pendingUpgrade: false, attackPower: 1, attackSpeed: 1, moveSpeed: 1 };
+  const player = role === 'princess'
+    ? { ...makeKnight({ id, peer, name: String(msg.name || 'プレイヤー').slice(0, 12), knightType }), role: 'princess' }
+    : makeKnight({ id, peer, name: String(msg.name || 'プレイヤー').slice(0, 12), knightType });
   room.players.set(id, player); peer.player = player; peer.room = room;
   send(peer, { type: 'you', id });
   if (room.players.size === 2 && room.phase === 'lobby') announce(room, '準備完了！ホストがゲームを開始できます');
   broadcast(room);
+}
+
+function addBot(room) {
+  if (room.players.size >= 5) return false;
+  const number = [...room.players.values()].filter(p => p.isBot).length + 1;
+  const bot = makeKnight({ id: `bot-${Date.now()}-${number}`, name: `守護Bot ${number}`, isBot: true });
+  if (room.phase === 'playing') {
+    bot.x = (Math.random() - .5) * 180;
+    bot.y = (Math.random() - .5) * 180;
+  }
+  room.players.set(bot.id, bot);
+  announce(room, `${bot.name}が防衛に参加した`);
+  return true;
 }
 
 function startGame(room) {
@@ -123,12 +141,26 @@ function chooseUpgrade(room, player, choice) {
   advanceLevel(room, player);
 }
 
+function driveBot(room, bot, now) {
+  const princess = [...room.players.values()].find(p => p.role === 'princess');
+  if (!princess || bot.role !== 'knight' || bot.disabledUntil > now) return;
+  const target = room.enemies.filter(e => e.hp > 1).sort((a, b) => Math.hypot(a.x - bot.x, a.y - bot.y) - Math.hypot(b.x - bot.x, b.y - bot.y))[0];
+  if (!target) { bot.input = { aimX: 1, aimY: 0 }; return; }
+  const dx = target.x - bot.x, dy = target.y - bot.y, distance = Math.hypot(dx, dy) || 1;
+  bot.facingX = dx / distance; bot.facingY = dy / distance;
+  const preferredDistance = 260;
+  const move = distance > preferredDistance ? 1 : distance < 150 ? -1 : 0;
+  bot.input = { up: move * dy < -20, down: move * dy > 20, left: move * dx < -20, right: move * dx > 20, aimX: bot.facingX, aimY: bot.facingY };
+}
+
 function tick(room, now) {
   if (room.phase !== 'playing') return;
   const dt = Math.min(.05, (now-room.lastTick)/1000); room.lastTick = now;
   const players = [...room.players.values()], princess = players.find(p=>p.role==='princess');
   if (!princess) { room.phase='over'; announce(room,'姫がいなくなりました'); return; }
+  for (const bot of players.filter(p => p.isBot && p.pendingUpgrade)) chooseUpgrade(room, bot, 'power');
   if (players.some(p=>p.pendingUpgrade)) return;
+  for (const bot of players.filter(p => p.isBot)) driveBot(room, bot, now);
   room.waveTime = Math.max(0,room.waveTime-dt);
   if (room.waveTime <= 0) {
     if (room.wave < 5) {
@@ -249,6 +281,7 @@ function frame(peer, chunk) {
       else if (msg.type === 'buff' && peer.room && peer.player) activatePrincessBuff(peer.room, peer.player, Date.now());
       else if (msg.type === 'cast' && peer.room && peer.player) castMage(peer.room, peer.player, Date.now());
       else if (msg.type === 'start' && peer.room && peer.room.players.values().next().value === peer.player) startGame(peer.room);
+      else if (msg.type === 'addBot' && peer.room && peer.room.players.values().next().value === peer.player) { addBot(peer.room); broadcast(peer.room); }
       else if (msg.type === 'input' && peer.player) {
         const input=msg.input||{},ax=Number.isFinite(Number(input.aimX))?Number(input.aimX):1,ay=Number.isFinite(Number(input.aimY))?Number(input.aimY):0,aimLength=Math.hypot(ax,ay)||1;
         peer.player.input={up:!!input.up,down:!!input.down,left:!!input.left,right:!!input.right,attack:!!input.attack,aimX:ax/aimLength,aimY:ay/aimLength};
@@ -263,7 +296,7 @@ http.on('upgrade', (req, socket) => {
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   socket.buffer = Buffer.alloc(0); socket.on('data', data => frame(socket,data));
   socket.on('error', () => socket.destroy());
-  socket.on('close', () => { const room=socket.room, p=socket.player; if (!room||!p) return; room.players.delete(p.id); if (!room.players.size) rooms.delete(room.code); else { if (p.role==='princess' && room.phase==='playing') { room.phase='over'; announce(room,'姫が退出しました'); } broadcast(room); } });
+  socket.on('close', () => { const room=socket.room, p=socket.player; if (!room||!p) return; room.players.delete(p.id); const humans=[...room.players.values()].filter(player=>!player.isBot); if (!humans.length) rooms.delete(room.code); else { if (p.role==='princess' && room.phase==='playing') { room.phase='over'; announce(room,'姫が退出しました'); } broadcast(room); } });
 });
 
 setInterval(() => { const now=Date.now(); for (const room of rooms.values()) { tick(room,now); broadcast(room); } }, 50);

@@ -32,6 +32,7 @@ $('#joinForm').addEventListener('submit', ev => { ev.preventDefault(); enterRoom
 $('#createRoom').addEventListener('click', () => enterRoom('create'));
 $('#room').addEventListener('input', ev => ev.target.value = ev.target.value.toUpperCase().replace(/[^A-Z0-9]/g,''));
 $('#startBtn').addEventListener('click', () => socket?.send(JSON.stringify({type:'start'})));
+$('#addBotBtn').addEventListener('click', () => socket?.send(JSON.stringify({type:'addBot'})));
 $('#leaveBtn').addEventListener('click', leave); $('#returnBtn').addEventListener('click', leave);
 $('#upgradeOverlay').addEventListener('click',ev=>{const button=ev.target.closest('[data-upgrade]');if(button)socket?.send(JSON.stringify({type:'upgrade',choice:button.dataset.upgrade}));});
 mobileBuff.addEventListener('click',()=>socket?.send(JSON.stringify({type:'buff'})));
@@ -54,7 +55,7 @@ function renderState() {
   $('#levelLabel').textContent=`LV ${me?.level||1}`;$('#xpText').textContent=`${Number(me?.xp||0).toFixed(1).replace(/\.0$/,'')} / ${me?.nextXp||3} XP`;$('#xpFill').style.width=`${Math.min(100,100*(me?.xp||0)/(me?.nextXp||3))}%`;
   $('#levelHud').classList.toggle('hidden',state.phase!=='playing');
   $('#waveLabel').textContent=state.wave===5?'BOSS / WAVE 5':`WAVE ${state.wave||1} / 5`;
-  $('#roster').innerHTML=state.players.map(p=>`<div class="roster-item"><span class="avatar ${p.role==='knight'?'knight':''}">${p.role==='princess'?'♕':'⚔'}</span><b>${escapeHtml(p.name)}</b><span class="role">${p.role==='princess'?'姫':`${knightLabels[p.knightType]||'ナイト'}・ナイト`}${p.id===myId?' · あなた':''}</span></div>`).join('');
+  $('#roster').innerHTML=state.players.map(p=>`<div class="roster-item"><span class="avatar ${p.role==='knight'?'knight':''}">${p.role==='princess'?'♕':'⚔'}</span><b>${escapeHtml(p.name)}</b><span class="role">${p.role==='princess'?'姫':p.isBot?`${knightLabels[p.knightType]||'ナイト'}・テストBot`:`${knightLabels[p.knightType]||'ナイト'}・ナイト`}${p.id===myId?' · あなた':''}</span></div>`).join('');
   const host=state.players[0]?.id===myId, canStart=host&&state.phase==='lobby'&&state.players.length>=2;
   const pending=!!me?.pendingUpgrade;
   const gamePaused=state.players.some(p=>p.pendingUpgrade);
@@ -81,7 +82,8 @@ function renderState() {
   mobileCast.innerHTML=(me?.mp||0)<mpCost?'魔導弾<br><small>MP不足</small>':'魔導弾<br><small>発射</small>';
   $('#controlsHint').innerHTML=me?.role==='princess'?'姫は移動なし <span class="separator">·</span> 照準＋クリック攻撃 <span class="separator">·</span> <kbd>Q</kbd> 加護':isMage?`<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 <span class="separator">·</span> <kbd>SPACE</kbd> 魔導弾（MP消費）`:`<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 <span class="separator">·</span> ${knightLabels[me?.knightType]||'ナイト'}攻撃オート`;
   if(pending!==upgradePending){upgradePending=pending;keyState={};lastInput='';syncInput();}
-  $('#startBtn').classList.toggle('hidden',!canStart); $('#waitingNote').textContent=state.players.length<2?'2人集まると出発できます':host?'ゲームを開始できます':'ホストが開始するのを待っています';
+  const canAddBot=host&&state.players.length<5&&(state.phase==='lobby'||state.phase==='playing');
+  $('#addBotBtn').classList.toggle('hidden',!canAddBot); $('#startBtn').classList.toggle('hidden',!canStart); $('#waitingNote').textContent=state.players.length<2?'テストBotを追加すると開始できます':host?'ゲームを開始できます':'ホストが開始するのを待っています';
   $('#lobbyOverlay').classList.toggle('hidden',state.phase!=='lobby'); $('#toast').textContent=state.message||'';
   if (princess) { $('#healthFill').style.width=`${princess.hp}%`; $('#healthText').textContent=princess.hp; }
   const seconds=Math.ceil(state.time); $('#timer').textContent=`${String(Math.floor(seconds/60)).padStart(2,'0')}:${String(seconds%60).padStart(2,'0')}`;
