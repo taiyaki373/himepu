@@ -7,12 +7,19 @@ const PORT = Number(process.env.PORT || 3000);
 const ROOT = new URL('./public/', import.meta.url);
 const rooms = new Map();
 const mime = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8' };
+const FIELD_LIMIT = 1000;
 const knightWeapons = {
-  sword: { name: '剣士', weapon: 'sword', range: 165, cooldown: 720, speed: 620, damage: 42 },
-  archer: { name: '射手', weapon: 'arrow', range: 720, cooldown: 620, speed: 850, damage: 25 },
-  mage: { name: '魔導士', weapon: 'orb', range: 560, cooldown: 1120, speed: 390, damage: 43, splash: 66 },
-  lancer: { name: '槍兵', weapon: 'spear', range: 470, cooldown: 870, speed: 720, damage: 36, pierce: 2 },
+  sword: { name: '剣士', weapon: 'sword', reach: 320, halfAngle: Math.PI/4, cooldown: 720, damage: 42, melee: true },
+  archer: { name: '弓兵', weapon: 'arrow', range: 820, cooldown: 600, speed: 1000, damage: 28 },
+  mage: { name: '魔導士', weapon: 'orb', range: 760, cooldown: 3000, speed: 420, damage: 58, splash: 70, mpCost: 25, mpRegen: 8 },
+  lancer: { name: '槍兵', weapon: 'spear', reach: 470, lateral: 42, cooldown: 860, damage: 38, melee: true },
 };
+
+function enemyDamageMultiplier(enemy, melee) {
+  if (enemy.type === 'bulwark') return melee ? 1.6 : 0.55;
+  if (enemy.type === 'shade') return melee ? 0.55 : 1.6;
+  return 1;
+}
 
 const http = createServer(async (req, res) => {
   const path = new URL(req.url, `http://${req.headers.host}`).pathname;
@@ -38,11 +45,11 @@ function send(peer, message) {
 
 function snapshot(room) {
   const now = Date.now();
-  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, message: room.message };
+  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, mp: p.mp, maxMp: p.maxMp, mpCost: knightWeapons[p.knightType]?.mpCost||0, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), attackFlashUntil: p.attackFlashUntil||0, attackAxis: p.attackAxis||null, attackFacingX: Number.isFinite(p.attackFacingX)?p.attackFacingX:(Number.isFinite(p.facingX)?p.facingX:1), attackFacingY: Number.isFinite(p.attackFacingY)?p.attackFacingY:(Number.isFinite(p.facingY)?p.facingY:0), facingX: Number.isFinite(p.facingX)?p.facingX:1, facingY: Number.isFinite(p.facingY)?p.facingY:0, aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, effects: room.effects, message: room.message };
 }
 function broadcast(room) { const state = snapshot(room); for (const p of room.players.values()) send(p.peer, state); }
 function announce(room, message) { room.message = message; }
-function makeRoom(code) { return { code, players: new Map(), enemies: [], projectiles: [], enemyShots: [], xpOrbs: [], phase: 'lobby', wave: 0, waveTime: 0, waveStartedAt: 0, buffUntil: 0, buffCooldownUntil: 0, buffDurationMultiplier: 1, knightXpMultiplier: 1, knightDamageMultiplier: 1, bossSpawned: false, message: '仲間を待っています', lastSpawn: 0, lastTick: Date.now(), seq: 0, projectileSeq: 0, enemyShotSeq: 0, orbSeq: 0 }; }
+function makeRoom(code) { return { code, players: new Map(), enemies: [], projectiles: [], enemyShots: [], xpOrbs: [], effects: [], phase: 'lobby', wave: 0, waveTime: 0, waveStartedAt: 0, buffUntil: 0, buffCooldownUntil: 0, buffDurationMultiplier: 1, knightXpMultiplier: 1, knightDamageMultiplier: 1, bossSpawned: false, message: '仲間を待っています', lastSpawn: 0, lastTick: Date.now(), seq: 0, projectileSeq: 0, enemyShotSeq: 0, orbSeq: 0 }; }
 function addPlayer(peer, msg, room) {
   const code = String(msg.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
   if (!/^[A-Z0-9]{4,8}$/.test(code)) return send(peer, { type: 'error', text: '部屋コードは4〜8文字で入力してください' });
@@ -51,7 +58,7 @@ function addPlayer(peer, msg, room) {
   const id = Math.random().toString(36).slice(2, 9);
   const role = room.players.size === 0 ? 'princess' : 'knight';
   const knightType = Object.hasOwn(knightWeapons, msg.knightType) ? msg.knightType : 'archer';
-  const player = { id, peer, name: String(msg.name || 'プレイヤー').slice(0, 12), role, knightType, x: 0, y: 0, hp: 100, maxHp: 100, lastAttack: 0, disabledUntil: 0, buffCooldownUntil: 0, input: { aimX: 1, aimY: 0 }, xp: 0, nextXp: 3, level: 1, pendingUpgrade: false, attackPower: 1, attackSpeed: 1, moveSpeed: 1 };
+  const player = { id, peer, name: String(msg.name || 'プレイヤー').slice(0, 12), role, knightType, x: 0, y: 0, facingX: 1, facingY: 0, hp: 100, maxHp: 100, mp: 100, maxMp: 100, lastAttack: 0, disabledUntil: 0, buffCooldownUntil: 0, input: { aimX: 1, aimY: 0 }, xp: 0, nextXp: 3, level: 1, pendingUpgrade: false, attackPower: 1, attackSpeed: 1, moveSpeed: 1 };
   room.players.set(id, player); peer.player = player; peer.room = room;
   send(peer, { type: 'you', id });
   if (room.players.size === 2 && room.phase === 'lobby') announce(room, '準備完了！ホストがゲームを開始できます');
@@ -61,8 +68,8 @@ function addPlayer(peer, msg, room) {
 function startGame(room) {
   if (room.phase !== 'lobby' || room.players.size < 2) return;
   const now = Date.now();
-  room.phase = 'playing'; room.wave = 1; room.waveTime = 30; room.waveStartedAt = now; room.enemies = []; room.projectiles = []; room.enemyShots = []; room.xpOrbs = []; room.lastSpawn = now; room.lastTick = now; room.bossSpawned = false; room.buffUntil = 0; room.buffCooldownUntil = 0; room.buffDurationMultiplier = 1; room.knightXpMultiplier = 1; room.knightDamageMultiplier = 1;
-  for (const p of room.players.values()) { p.hp = 100; p.x = p.role==='princess'?0:(Math.random()-.5)*180; p.y = p.role==='princess'?0:(Math.random()-.5)*180; p.xp = 0; p.nextXp = 3; p.level = 1; p.pendingUpgrade = false; p.attackPower = 1; p.attackSpeed = 1; p.moveSpeed = 1; p.disabledUntil = 0; p.buffCooldownUntil = 0; p.input = { aimX: 1, aimY: 0 }; }
+  room.phase = 'playing'; room.wave = 1; room.waveTime = 30; room.waveStartedAt = now; room.enemies = []; room.projectiles = []; room.enemyShots = []; room.xpOrbs = []; room.effects = []; room.lastSpawn = now; room.lastTick = now; room.bossSpawned = false; room.buffUntil = 0; room.buffCooldownUntil = 0; room.buffDurationMultiplier = 1; room.knightXpMultiplier = 1; room.knightDamageMultiplier = 1;
+  for (const p of room.players.values()) { p.hp = 100; p.mp = p.maxMp; p.lastAttack = 0; p.facingX = 1; p.facingY = 0; p.x = p.role==='princess'?0:(Math.random()-.5)*180; p.y = p.role==='princess'?0:(Math.random()-.5)*180; p.xp = 0; p.nextXp = 3; p.level = 1; p.pendingUpgrade = false; p.attackPower = 1; p.attackSpeed = 1; p.moveSpeed = 1; p.disabledUntil = 0; p.buffCooldownUntil = 0; p.input = { aimX: 1, aimY: 0 }; }
   announce(room, 'WAVE 1 / 5 — 姫を守れ！');
 }
 
@@ -73,12 +80,24 @@ function activatePrincessBuff(room, player, now) {
   announce(room, '姫の加護！ナイトの攻撃速度と移動速度が上昇');
 }
 
-function advanceLevel(player) {
+function castMage(room, player, now) {
+  const weapon = knightWeapons.mage;
+  const cooldown=weapon.cooldown/(player.attackSpeed*(room.buffUntil>now?1.35:1));
+  if (room.phase !== 'playing' || [...room.players.values()].some(p=>p.pendingUpgrade) || player.role !== 'knight' || player.knightType !== 'mage' || player.pendingUpgrade || player.disabledUntil > now || player.mp < weapon.mpCost || now-player.lastAttack < cooldown) return;
+  const target = room.enemies.filter(e=>e.hp>1&&Math.hypot(e.x-player.x,e.y-player.y)<=weapon.range).sort((a,b)=>Math.hypot(a.x-player.x,a.y-player.y)-Math.hypot(b.x-player.x,b.y-player.y))[0];
+  if (!target) return;
+  player.mp -= weapon.mpCost; player.lastAttack = now;
+  const dx=target.x-player.x,dy=target.y-player.y,d=Math.hypot(dx,dy)||1;
+  room.projectiles.push({id:++room.projectileSeq,role:'knight',weapon:'orb',x:player.x,y:player.y,px:player.x,py:player.y,vx:dx/d*weapon.speed,vy:dy/d*weapon.speed,damage:weapon.damage*player.attackPower*room.knightDamageMultiplier,life:3.5,splash:weapon.splash,pierce:1,homing:true,targetId:target.id});
+}
+
+function advanceLevel(room, player) {
   if (!player.pendingUpgrade && player.xp >= player.nextXp) {
     player.xp -= player.nextXp; player.level += 1; player.nextXp = Math.ceil(player.nextXp*1.35); player.pendingUpgrade = true; player.input = { aimX: 1, aimY: 0 };
+    announce(room, `${player.name}がレベルアップ！強化を選んでいます`);
   }
 }
-function gainXp(player, amount) { player.xp += amount; advanceLevel(player); }
+function gainXp(room, player, amount) { player.xp += amount; advanceLevel(room, player); }
 
 function chooseUpgrade(room, player, choice) {
   if (!player.pendingUpgrade) return;
@@ -89,7 +108,7 @@ function chooseUpgrade(room, player, choice) {
       buffPower: () => { room.buffDurationMultiplier *= 1.25; return '姫の加護の効果時間'; },
     };
     const supportApply=supportUpgrades[choice];if(!supportApply)return;
-    const supportName=supportApply();player.pendingUpgrade=false;advanceLevel(player);announce(room,`${player.name}は${supportName}を強化した`);return;
+    const supportName=supportApply();player.pendingUpgrade=false;announce(room,`${player.name}は${supportName}を強化した`);advanceLevel(room,player);return;
   }
   const upgrades = {
     power: () => { player.attackPower *= 1.25; return '攻撃力'; },
@@ -100,15 +119,17 @@ function chooseUpgrade(room, player, choice) {
   if (!apply) return;
   const name = apply();
   player.pendingUpgrade = false;
-  advanceLevel(player);
   announce(room, `${player.name}は${name}を強化した`);
+  advanceLevel(room, player);
 }
 
 function tick(room, now) {
   if (room.phase !== 'playing') return;
-  const dt = Math.min(.05, (now-room.lastTick)/1000); room.lastTick = now; room.waveTime = Math.max(0,room.waveTime-dt);
+  const dt = Math.min(.05, (now-room.lastTick)/1000); room.lastTick = now;
   const players = [...room.players.values()], princess = players.find(p=>p.role==='princess');
   if (!princess) { room.phase='over'; announce(room,'姫がいなくなりました'); return; }
+  if (players.some(p=>p.pendingUpgrade)) return;
+  room.waveTime = Math.max(0,room.waveTime-dt);
   if (room.waveTime <= 0) {
     if (room.wave < 5) {
       room.wave += 1; room.waveTime = room.wave === 5 ? 90 : 30; room.waveStartedAt = now; room.bossSpawned = false;
@@ -126,20 +147,44 @@ function tick(room, now) {
     }
     const speed=220*p.moveSpeed*(buffActive?1.18:1);
     const dx=Number(!!p.input.right)-Number(!!p.input.left),dy=Number(!!p.input.down)-Number(!!p.input.up),len=Math.hypot(dx,dy)||1;
-    p.x=Math.max(-900,Math.min(900,p.x+dx/len*speed*dt));p.y=Math.max(-900,Math.min(900,p.y+dy/len*speed*dt));
-    if(p.disabledUntil>now)continue;
+    if(dx||dy){p.facingX=dx/len;p.facingY=dy/len;}
+    p.x=Math.max(-FIELD_LIMIT,Math.min(FIELD_LIMIT,p.x+dx/len*speed*dt));p.y=Math.max(-FIELD_LIMIT,Math.min(FIELD_LIMIT,p.y+dy/len*speed*dt));
     const weapon=knightWeapons[p.knightType]||knightWeapons.archer;
-    const target=room.enemies.filter(e=>e.hp>1&&Math.hypot(e.x-p.x,e.y-p.y)<weapon.range).sort((a,b)=>Math.hypot(a.x-p.x,a.y-p.y)-Math.hypot(b.x-p.x,b.y-p.y))[0];
+    p.mp=Math.min(p.maxMp,p.mp+(weapon.mpRegen||0)*dt);
+    if(p.disabledUntil>now)continue;
+    if(p.knightType==='mage')continue;
+    const targets=room.enemies.filter(e=>{
+      if(e.hp<=1)return false;
+      const tx=e.x-p.x,ty=e.y-p.y,d=Math.hypot(tx,ty)||1;
+      if(p.knightType==='sword')return d<=weapon.reach&&(tx*p.facingX+ty*p.facingY)/d>=Math.cos(weapon.halfAngle);
+      if(p.knightType==='lancer'){const forward=tx*p.facingX+ty*p.facingY,lateral=Math.abs(tx*p.facingY-ty*p.facingX);return forward>0&&forward<=weapon.reach&&lateral<=weapon.lateral;}
+      return d<=weapon.range;
+    }).sort((a,b)=>Math.hypot(a.x-p.x,a.y-p.y)-Math.hypot(b.x-p.x,b.y-p.y));
+    const target=targets[0];
     const cooldown=Math.max(260,weapon.cooldown/(p.attackSpeed*(buffActive?1.35:1)));
-    if(target&&now-p.lastAttack>=cooldown){p.lastAttack=now;const tx=target.x-p.x,ty=target.y-p.y,d=Math.hypot(tx,ty)||1;room.projectiles.push({id:++room.projectileSeq,role:'knight',weapon:weapon.weapon,x:p.x,y:p.y,px:p.x,py:p.y,vx:tx/d*weapon.speed,vy:ty/d*weapon.speed,damage:weapon.damage*p.attackPower*room.knightDamageMultiplier,life:weapon.weapon==='sword'?.3:2.2,splash:weapon.splash||0,pierce:weapon.pierce||1});}
+    if(targets.length&&now-p.lastAttack>=cooldown){
+      p.lastAttack=now;
+      const damage=weapon.damage*p.attackPower*room.knightDamageMultiplier;
+      if(weapon.melee){
+        p.attackFlashUntil=now+220;p.attackAxis=p.knightType;p.attackFacingX=p.facingX;p.attackFacingY=p.facingY;
+        for(const enemy of targets)enemy.hp=Math.max(1,enemy.hp-damage*enemyDamageMultiplier(enemy,true));
+      }else{
+        const tx=target.x-p.x,ty=target.y-p.y,d=Math.hypot(tx,ty)||1;
+        room.projectiles.push({id:++room.projectileSeq,role:'knight',weapon:weapon.weapon,x:p.x,y:p.y,px:p.x,py:p.y,vx:tx/d*weapon.speed,vy:ty/d*weapon.speed,damage,life:2.2,splash:weapon.splash||0,pierce:weapon.pierce||1});
+      }
+    }
   }
   if(room.wave===5&&!room.bossSpawned){room.bossSpawned=true;const angle=Math.random()*Math.PI*2;room.enemies.push({id:++room.seq,type:'boss',x:princess.x+Math.cos(angle)*560,y:princess.y+Math.sin(angle)*560,hp:900+players.length*180,maxHp:900+players.length*180,speed:42,damageAt:0,attackAt:now+1700,radius:29});}
-  const spawnInterval=Math.max(480,2050-room.wave*280);
+  const spawnInterval=Math.max(480,(2050-room.wave*280)*1.15);
   if(now-room.lastSpawn>spawnInterval&&room.enemies.length<30){
     room.lastSpawn=now;const angle=Math.random()*Math.PI*2,distance=480+Math.random()*140;
-    let type='grunt';if(room.wave>=3&&Math.random()<.24)type='disruptor';else if(room.wave>=2&&Math.random()<.3)type='ranger';
-    const hp=(90+room.wave*24)*(type==='disruptor'?1.25:1),speed=type==='ranger'?42:48+room.wave*4;
-    room.enemies.push({id:++room.seq,type,x:princess.x+Math.cos(angle)*distance,y:princess.y+Math.sin(angle)*distance,hp,maxHp:hp,speed,damageAt:0,attackAt:now+1100,radius:type==='disruptor'?14:11});
+    let type='grunt';const typeRoll=Math.random();
+    if(room.wave>=2&&typeRoll<.08)type='bulwark';
+    else if(room.wave>=2&&typeRoll<.16)type='shade';
+    else {const specialRoll=Math.random();if(room.wave>=3&&specialRoll<.24)type='disruptor';else if(room.wave>=2&&specialRoll<.3)type='ranger';}
+    const hp=(90+room.wave*24)*(type==='disruptor'?1.25:type==='bulwark'?1.55:type==='shade'?.9:1);
+    const speed=type==='ranger'?42:type==='bulwark'?34:type==='shade'?58:48+room.wave*4;
+    room.enemies.push({id:++room.seq,type,x:princess.x+Math.cos(angle)*distance,y:princess.y+Math.sin(angle)*distance,hp,maxHp:hp,speed,damageAt:0,attackAt:now+1100,radius:type==='disruptor'||type==='bulwark'?15:11});
   }
   for(const e of room.enemies){
     const dx=princess.x-e.x,dy=princess.y-e.y,d=Math.hypot(dx,dy)||1;
@@ -150,10 +195,11 @@ function tick(room, now) {
     if(e.type==='boss'&&now>=e.attackAt){e.attackAt=now+1400;const base=Math.atan2(dy,dx);for(const offset of [-.3,0,.3])room.enemyShots.push({id:++room.enemyShotSeq,type:'boss',targetId:princess.id,x:e.x,y:e.y,vx:Math.cos(base+offset)*310,vy:Math.sin(base+offset)*310,life:2.8,damage:12});}
   }
   const shots=[];
-  for(const shot of room.projectiles){shot.px=shot.x;shot.py=shot.y;shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;
+  for(const shot of room.projectiles){shot.px=shot.x;shot.py=shot.y;if(shot.homing){let target=room.enemies.find(e=>e.id===shot.targetId&&e.hp>1);if(!target)target=room.enemies.filter(e=>e.hp>1).sort((a,b)=>Math.hypot(a.x-shot.x,a.y-shot.y)-Math.hypot(b.x-shot.x,b.y-shot.y))[0];if(target){shot.targetId=target.id;const dx=target.x-shot.x,dy=target.y-shot.y,d=Math.hypot(dx,dy)||1;shot.vx=dx/d*knightWeapons.mage.speed;shot.vy=dy/d*knightWeapons.mage.speed;}}shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;
     const target=room.enemies.find(e=>Math.hypot(e.x-shot.x,e.y-shot.y)<(e.radius||11)+6);
     if(target){const hits=shot.splash?room.enemies.filter(e=>Math.hypot(e.x-target.x,e.y-target.y)<shot.splash):[target];
-      for(const enemy of hits){if(shot.role==='princess')enemy.hp-=shot.damage;else enemy.hp=Math.max(1,enemy.hp-shot.damage);
+      if(shot.weapon==='orb')room.effects.push({x:target.x,y:target.y,createdAt:now,duration:360,radius:shot.splash});
+      for(const enemy of hits){const damage=shot.damage*enemyDamageMultiplier(enemy,shot.weapon==='sword'||shot.weapon==='spear');if(shot.role==='princess')enemy.hp-=damage;else enemy.hp=Math.max(1,enemy.hp-damage);
         if(enemy.hp<=0){room.enemies=room.enemies.filter(e=>e!==enemy);room.xpOrbs.push({id:++room.orbSeq,x:enemy.x,y:enemy.y,value:enemy.type==='boss'?5:1});if(enemy.type==='boss'){room.phase='clear';room.waveTime=0;announce(room,'ボス撃破！GAME CLEAR');}else announce(room,'姫が敵を撃破！経験値が落ちた');}
       }
       if(target.type==='boss'&&target.hp<=0)continue;
@@ -163,13 +209,14 @@ function tick(room, now) {
     if(shot.life>0)shots.push(shot);
   }
   room.projectiles=shots;
+  room.effects=room.effects.filter(effect=>now-effect.createdAt<effect.duration);
   const enemyShots=[];
   for(const shot of room.enemyShots){shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;const target=players.find(p=>p.id===shot.targetId);
     if(target&&Math.hypot(target.x-shot.x,target.y-shot.y)<18){if(shot.type==='seal'){target.disabledUntil=now+2600;announce(room,`${target.name}の武器が封じられた！`);}else if(target.role==='princess'){target.hp=Math.max(0,target.hp-shot.damage);if(!target.hp){room.phase='over';announce(room,'姫が倒れてしまった…');}}continue;}
     if(shot.life>0)enemyShots.push(shot);
   }
   room.enemyShots=enemyShots;
-  for(const orb of [...room.xpOrbs]){const collector=players.filter(p=>!p.pendingUpgrade&&Math.hypot(p.x-orb.x,p.y-orb.y)<30).sort((a,b)=>Math.hypot(a.x-orb.x,a.y-orb.y)-Math.hypot(b.x-orb.x,b.y-orb.y))[0];if(!collector)continue;room.xpOrbs=room.xpOrbs.filter(item=>item!==orb);const amount=orb.value*(collector.role==='knight'?room.knightXpMultiplier:1);gainXp(collector,amount);if(collector.role==='knight')gainXp(princess,amount*.5);announce(room,`${collector.name}が経験値を取得！姫にも経験値が届いた`);}
+  for(const orb of [...room.xpOrbs]){const collector=players.filter(p=>!p.pendingUpgrade&&Math.hypot(p.x-orb.x,p.y-orb.y)<30).sort((a,b)=>Math.hypot(a.x-orb.x,a.y-orb.y)-Math.hypot(b.x-orb.x,b.y-orb.y))[0];if(!collector)continue;room.xpOrbs=room.xpOrbs.filter(item=>item!==orb);const amount=orb.value*(collector.role==='knight'?room.knightXpMultiplier:1);announce(room,`${collector.name}が経験値を取得！姫にも経験値が届いた`);gainXp(room,collector,amount);if(collector.role==='knight')gainXp(room,princess,amount*.5);}
 }
 
 function frame(peer, chunk) {
@@ -200,6 +247,7 @@ function frame(peer, chunk) {
       }
       else if (msg.type === 'upgrade' && peer.room && peer.player) chooseUpgrade(peer.room, peer.player, msg.choice);
       else if (msg.type === 'buff' && peer.room && peer.player) activatePrincessBuff(peer.room, peer.player, Date.now());
+      else if (msg.type === 'cast' && peer.room && peer.player) castMage(peer.room, peer.player, Date.now());
       else if (msg.type === 'start' && peer.room && peer.room.players.values().next().value === peer.player) startGame(peer.room);
       else if (msg.type === 'input' && peer.player) {
         const input=msg.input||{},ax=Number.isFinite(Number(input.aimX))?Number(input.aimX):1,ay=Number.isFinite(Number(input.aimY))?Number(input.aimY):0,aimLength=Math.hypot(ax,ay)||1;
