@@ -21,11 +21,28 @@ function enemyDamageMultiplier(enemy, melee) {
   return 1;
 }
 
-function enemyHitRadius(enemy) { return Math.max(1, enemy.radius||11); }
+// 画面上の顔画像の縦横比に寄せた、攻撃用の当たり判定（移動・接触距離は従来どおり radius を使用）。
+function enemyHitbox(enemy) {
+  if (enemy.type === 'boss') return { x: 174, y: 213 };
+  if (enemy.type === 'grunt') return { x: 45, y: 92 };
+  if (enemy.type === 'ranger') return { x: 82, y: 92 };
+  return { x: 65, y: 92 };
+}
+function enemyHitRadius(enemy) { const box=enemyHitbox(enemy); return Math.max(box.x,box.y)*.65; }
 function segmentDistance(x1,y1,x2,y2,px,py) {
   const dx=x2-x1,dy=y2-y1,lengthSquared=dx*dx+dy*dy;
   const t=lengthSquared?Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/lengthSquared)):0;
   return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+}
+function segmentHitsEnemy(x1,y1,x2,y2,enemy) {
+  // タイ米は縦長なので、顔の上側・下側へ円形判定を2つ並べる。
+  // これで横方向に広がり過ぎず、頭から口元まで自然に弾が当たる。
+  if (enemy.type === 'grunt') {
+    // 上側は髪先まで覆う。下側は顔〜口元を覆う。
+    return [{ y:-52, r:56 },{ y:45, r:46 }].some(part => segmentDistance(x1,y1,x2,y2,enemy.x,enemy.y+part.y)<=part.r);
+  }
+  const box=enemyHitbox(enemy);
+  return segmentDistance(x1/box.x,y1/box.y,x2/box.x,y2/box.y,enemy.x/box.x,enemy.y/box.y)<=1;
 }
 
 const http = createServer(async (req, res) => {
@@ -52,7 +69,7 @@ function send(peer, message) {
 
 function snapshot(room) {
   const now = Date.now();
-  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, isBot: !!p.isBot, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, mp: p.mp, maxMp: p.maxMp, mpCost: knightWeapons[p.knightType]?.mpCost||0, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), attackFlashUntil: p.attackFlashUntil||0, attackAxis: p.attackAxis||null, attackFacingX: Number.isFinite(p.attackFacingX)?p.attackFacingX:(Number.isFinite(p.facingX)?p.facingX:1), attackFacingY: Number.isFinite(p.attackFacingY)?p.attackFacingY:(Number.isFinite(p.facingY)?p.facingY:0), facingX: Number.isFinite(p.facingX)?p.facingX:1, facingY: Number.isFinite(p.facingY)?p.facingY:0, aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, effects: room.effects, message: room.message };
+  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, isBot: !!p.isBot, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, mp: p.mp, maxMp: p.maxMp, mpCost: knightWeapons[p.knightType]?.mpCost||0, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), attackFlashUntil: p.attackFlashUntil||0, attackAxis: p.attackAxis||null, attackFacingX: Number.isFinite(p.attackFacingX)?p.attackFacingX:(Number.isFinite(p.facingX)?p.facingX:1), attackFacingY: Number.isFinite(p.attackFacingY)?p.attackFacingY:(Number.isFinite(p.facingY)?p.facingY:0), facingX: Number.isFinite(p.facingX)?p.facingX:1, facingY: Number.isFinite(p.facingY)?p.facingY:0, aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0, aimDistance: Number.isFinite(p.input.aimDistance)?p.input.aimDistance:220 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, effects: room.effects, message: room.message };
 }
 function broadcast(room) { const state = snapshot(room); for (const p of room.players.values()) send(p.peer, state); }
 function announce(room, message) { room.message = message; }
@@ -77,10 +94,10 @@ function addPlayer(peer, msg, room) {
   broadcast(room);
 }
 
-function addBot(room) {
+function addBot(room, knightType = 'archer') {
   if (room.players.size >= 5) return false;
   const number = [...room.players.values()].filter(p => p.isBot).length + 1;
-  const bot = makeKnight({ id: `bot-${Date.now()}-${number}`, name: `守護Bot ${number}`, isBot: true });
+  const bot = makeKnight({ id: `bot-${Date.now()}-${number}`, name: `守護Bot ${number}`, knightType: Object.hasOwn(knightWeapons, knightType) ? knightType : 'archer', isBot: true });
   if (room.phase === 'playing') {
     bot.x = (Math.random() - .5) * 180;
     bot.y = (Math.random() - .5) * 180;
@@ -114,6 +131,18 @@ function castMage(room, player, now) {
   player.mp -= weapon.mpCost; player.lastAttack = now;
   const dx=target.x-player.x,dy=target.y-player.y,d=Math.hypot(dx,dy)||1;
   room.projectiles.push({id:++room.projectileSeq,role:'knight',weapon:'orb',x:player.x,y:player.y,px:player.x,py:player.y,vx:dx/d*weapon.speed,vy:dy/d*weapon.speed,damage:weapon.damage*player.attackPower*room.knightDamageMultiplier,life:3.5,splash:weapon.splash,pierce:1,homing:true,targetId:target.id});
+}
+
+function castPrincess(room, player, now, input = player.input) {
+  if (room.phase !== 'playing' || player.role !== 'princess' || player.pendingUpgrade || now-player.lastAttack < 430) return;
+  const ax=Number.isFinite(Number(input.aimX))?Number(input.aimX):1,ay=Number.isFinite(Number(input.aimY))?Number(input.aimY):0,aimLength=Math.hypot(ax,ay)||1;
+  const aimDistance=Math.max(90,Math.min(650,Number(input.aimDistance)||220)),x=player.x+ax/aimLength*aimDistance,y=player.y+ay/aimLength*aimDistance,radius=105,damage=27*player.attackPower;
+  player.lastAttack=now;
+  room.effects.push({type:'princessBurst',x,y,createdAt:now,duration:320,radius});
+  for(const enemy of room.enemies.filter(e=>Math.hypot(e.x-x,e.y-y)<=radius+enemyHitRadius(e))){
+    enemy.hp-=damage;
+    if(enemy.hp<=0){room.enemies=room.enemies.filter(e=>e!==enemy);room.xpOrbs.push({id:++room.orbSeq,x:enemy.x,y:enemy.y,value:enemy.type==='boss'?5:1});if(enemy.type==='boss'){room.phase='clear';room.waveTime=0;announce(room,'ボス撃破！GAME CLEAR');}else announce(room,'姫が敵を撃破！経験値が落ちた');}
+  }
 }
 
 function advanceLevel(room, player) {
@@ -158,6 +187,7 @@ function driveBot(room, bot, now) {
   const preferredDistance = 260;
   const move = distance > preferredDistance ? 1 : distance < 150 ? -1 : 0;
   bot.input = { up: move * dy < -20, down: move * dy > 20, left: move * dx < -20, right: move * dx > 20, aimX: bot.facingX, aimY: bot.facingY };
+  if (bot.knightType === 'mage') castMage(room, bot, now);
 }
 
 function tick(room, now) {
@@ -180,8 +210,7 @@ function tick(room, now) {
     if (p.pendingUpgrade) continue;
     if(p.role==='princess'){
       p.x=0;p.y=0;
-      const aimLength=Math.hypot(p.input.aimX||0,p.input.aimY||0)||1;
-      if(p.input.attack&&now-p.lastAttack>=430){p.lastAttack=now;room.projectiles.push({id:++room.projectileSeq,role:'princess',weapon:'aim',x:p.x,y:p.y,px:p.x,py:p.y,vx:(p.input.aimX||1)/aimLength*620,vy:(p.input.aimY||0)/aimLength*620,damage:27*p.attackPower,life:1.5,pierce:1});}
+      if(p.input.attack)castPrincess(room,p,now);
       continue;
     }
     const speed=220*p.moveSpeed*(buffActive?1.18:1);
@@ -236,7 +265,7 @@ function tick(room, now) {
   }
   const shots=[];
   for(const shot of room.projectiles){shot.px=shot.x;shot.py=shot.y;if(shot.homing){let target=room.enemies.find(e=>e.id===shot.targetId&&e.hp>1);if(!target)target=room.enemies.filter(e=>e.hp>1).sort((a,b)=>Math.hypot(a.x-shot.x,a.y-shot.y)-Math.hypot(b.x-shot.x,b.y-shot.y))[0];if(target){shot.targetId=target.id;const dx=target.x-shot.x,dy=target.y-shot.y,d=Math.hypot(dx,dy)||1;shot.vx=dx/d*knightWeapons.mage.speed;shot.vy=dy/d*knightWeapons.mage.speed;}}shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;
-    const target=room.enemies.find(e=>segmentDistance(shot.px,shot.py,shot.x,shot.y,e.x,e.y)<=enemyHitRadius(e));
+    const target=room.enemies.find(e=>segmentHitsEnemy(shot.px,shot.py,shot.x,shot.y,e));
     if(target){const hits=shot.splash?room.enemies.filter(e=>Math.hypot(e.x-target.x,e.y-target.y)<shot.splash):[target];
       if(shot.weapon==='orb')room.effects.push({x:target.x,y:target.y,createdAt:now,duration:360,radius:shot.splash});
       for(const enemy of hits){const damage=shot.damage*enemyDamageMultiplier(enemy,shot.weapon==='sword'||shot.weapon==='spear');if(shot.role==='princess')enemy.hp-=damage;else enemy.hp=Math.max(1,enemy.hp-damage);
@@ -288,11 +317,12 @@ function frame(peer, chunk) {
       else if (msg.type === 'upgrade' && peer.room && peer.player) chooseUpgrade(peer.room, peer.player, msg.choice);
       else if (msg.type === 'buff' && peer.room && peer.player) activatePrincessBuff(peer.room, peer.player, Date.now());
       else if (msg.type === 'cast' && peer.room && peer.player) castMage(peer.room, peer.player, Date.now());
+      else if (msg.type === 'princessCast' && peer.room && peer.player) castPrincess(peer.room, peer.player, Date.now(), msg);
       else if (msg.type === 'start' && peer.room && peer.room.players.values().next().value === peer.player) startGame(peer.room);
-      else if (msg.type === 'addBot' && peer.room && peer.room.players.values().next().value === peer.player) { addBot(peer.room); broadcast(peer.room); }
+      else if (msg.type === 'addBot' && peer.room && peer.room.players.values().next().value === peer.player) { addBot(peer.room, msg.knightType); broadcast(peer.room); }
       else if (msg.type === 'input' && peer.player) {
-        const input=msg.input||{},ax=Number.isFinite(Number(input.aimX))?Number(input.aimX):1,ay=Number.isFinite(Number(input.aimY))?Number(input.aimY):0,aimLength=Math.hypot(ax,ay)||1;
-        peer.player.input={up:!!input.up,down:!!input.down,left:!!input.left,right:!!input.right,attack:!!input.attack,aimX:ax/aimLength,aimY:ay/aimLength};
+        const input=msg.input||{},ax=Number.isFinite(Number(input.aimX))?Number(input.aimX):1,ay=Number.isFinite(Number(input.aimY))?Number(input.aimY):0,aimLength=Math.hypot(ax,ay)||1,aimDistance=Math.max(90,Math.min(650,Number(input.aimDistance)||220));
+        peer.player.input={up:!!input.up,down:!!input.down,left:!!input.left,right:!!input.right,attack:!!input.attack,aimX:ax/aimLength,aimY:ay/aimLength,aimDistance};
       }
     } catch {}
   }
