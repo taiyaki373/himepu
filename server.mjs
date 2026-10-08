@@ -136,7 +136,7 @@ function castMage(room, player, now) {
 function castPrincess(room, player, now, input = player.input) {
   if (room.phase !== 'playing' || player.role !== 'princess' || player.pendingUpgrade || now-player.lastAttack < 430) return;
   const ax=Number.isFinite(Number(input.aimX))?Number(input.aimX):1,ay=Number.isFinite(Number(input.aimY))?Number(input.aimY):0,aimLength=Math.hypot(ax,ay)||1;
-  const aimDistance=Math.max(90,Math.min(650,Number(input.aimDistance)||220)),x=player.x+ax/aimLength*aimDistance,y=player.y+ay/aimLength*aimDistance,radius=105,damage=27*player.attackPower;
+  const aimDistance=Math.max(90,Math.min(650,Number(input.aimDistance)||220)),x=player.x+ax/aimLength*aimDistance,y=player.y+ay/aimLength*aimDistance,radius=105,damage=2*player.attackPower;
   player.lastAttack=now;
   room.effects.push({type:'princessBurst',x,y,createdAt:now,duration:320,radius});
   for(const enemy of room.enemies.filter(e=>Math.hypot(e.x-x,e.y-y)<=radius+enemyHitRadius(e))){
