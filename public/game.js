@@ -10,6 +10,7 @@ const arenaWrap=$('.arena-wrap'),aimControls=document.createElement('div'),mobil
 const bossCutin=document.createElement('div');let bossCutinShownFor='',bossCutinTimer;
 bossCutin.className='boss-cutin';bossCutin.innerHTML='<div class="boss-cutin-stripe"></div><img src="/img/characters/boss.png" alt="ボス"><div class="boss-cutin-copy"><span>FINAL WAVE</span><strong>BOSS APPEARS</strong><b>小野の高校の落書き</b></div>';arenaWrap.append(bossCutin);
 function showBossCutin(){clearTimeout(bossCutinTimer);bossCutin.classList.remove('active');void bossCutin.offsetWidth;bossCutin.classList.add('active');bossCutinTimer=setTimeout(()=>bossCutin.classList.remove('active'),1800);}
+const upgradeWait=document.createElement('div');upgradeWait.className='upgrade-wait hidden';upgradeWait.innerHTML='<span>⌛</span><b>他ユーザーが強化内容を選択中</b><small>選択が終わるまで少し待ってね</small>';arenaWrap.append(upgradeWait);
 const howToButton=document.createElement('button'),homeHowToButton=document.createElement('button'),howToModal=document.createElement('div');
 howToButton.id='howToBtn';howToButton.className='how-to-play hidden';howToButton.type='button';howToButton.textContent='遊び方';$('#startBtn').before(howToButton);
 homeHowToButton.id='homeHowToBtn';homeHowToButton.className='home-how-to-play';homeHowToButton.type='button';homeHowToButton.textContent='遊び方';$('#joinForm').append(homeHowToButton);
@@ -75,6 +76,7 @@ function renderState() {
   const pending=!!me?.pendingUpgrade;
   const gamePaused=state.players.some(p=>p.pendingUpgrade);
   $('#upgradeOverlay').classList.toggle('hidden',!pending);
+  upgradeWait.classList.toggle('hidden',!gamePaused||pending);
   $('#upgradePlayer').textContent=`${me?.name||'プレイヤー'} がレベルアップ！ LV ${me?.level||1}`;
   const choices=$('.upgrade-options'), choiceRole=me?.role||'knight';
   if(choices.dataset.role!==choiceRole){
