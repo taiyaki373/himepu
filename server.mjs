@@ -13,6 +13,7 @@ const knightWeapons = {
   archer: { name: '弓兵', weapon: 'arrow', range: 820, cooldown: 600, speed: 1000, damage: 28 },
   mage: { name: '魔導士', weapon: 'orb', range: 760, cooldown: 3000, speed: 420, damage: 58, splash: 70, mpCost: 25, mpRegen: 8 },
   lancer: { name: '槍兵', weapon: 'spear', reach: 470, lateral: 42, cooldown: 860, damage: 38, melee: true },
+  tank: { name: 'タンク', weapon: 'shield', range: 0, cooldown: 1000, damage: 0 },
 };
 
 function enemyDamageMultiplier(enemy, melee) {
@@ -43,6 +44,14 @@ function segmentHitsEnemy(x1,y1,x2,y2,enemy) {
   }
   const box=enemyHitbox(enemy);
   return segmentDistance(x1/box.x,y1/box.y,x2/box.x,y2/box.y,enemy.x/box.x,enemy.y/box.y)<=1;
+}
+function blockingTank(players, x, y) {
+  return players.find(p => p.role === 'knight' && p.knightType === 'tank' && p.disabledUntil <= Date.now() && Math.hypot(p.x-x,p.y-y) <= 150);
+}
+function pushShieldBlock(room, tank, now) {
+  if ((tank.lastShieldBlockAt||0) > now-180) return;
+  tank.lastShieldBlockAt=now;
+  room.effects.push({type:'shieldBlock',x:tank.x,y:tank.y,createdAt:now,duration:260,radius:92});
 }
 
 const http = createServer(async (req, res) => {
@@ -148,7 +157,8 @@ function castPrincess(room, player, now, input = player.input) {
 function advanceLevel(room, player) {
   if (!player.pendingUpgrade && player.xp >= player.nextXp) {
     player.xp -= player.nextXp; player.level += 1; player.nextXp = Math.ceil(player.nextXp*1.35); player.pendingUpgrade = true; player.input = { aimX: 1, aimY: 0 };
-    announce(room, `${player.name}がレベルアップ！強化を選んでいます`);
+    if(player.role==='princess')player.hp=Math.min(player.maxHp,player.hp+10);
+    announce(room, `${player.name}がレベルアップ！${player.role==='princess'?'HPを10回復・':''}強化を選んでいます`);
   }
 }
 function gainXp(room, player, amount) { player.xp += amount; advanceLevel(room, player); }
@@ -184,7 +194,7 @@ function driveBot(room, bot, now) {
   if (!target) { bot.input = { aimX: 1, aimY: 0 }; return; }
   const dx = target.x - bot.x, dy = target.y - bot.y, distance = Math.hypot(dx, dy) || 1;
   bot.facingX = dx / distance; bot.facingY = dy / distance;
-  const preferredDistance = 260;
+  const preferredDistance = bot.knightType==='tank' ? 110 : 260;
   const move = distance > preferredDistance ? 1 : distance < 150 ? -1 : 0;
   bot.input = { up: move * dy < -20, down: move * dy > 20, left: move * dx < -20, right: move * dx > 20, aimX: bot.facingX, aimY: bot.facingY };
   if (bot.knightType === 'mage') castMage(room, bot, now);
@@ -256,6 +266,8 @@ function tick(room, now) {
     room.enemies.push({id:++room.seq,type,x:princess.x+Math.cos(angle)*distance,y:princess.y+Math.sin(angle)*distance,hp,maxHp:hp,speed,damageAt:0,attackAt:now+1100,radius:type==='disruptor'||type==='bulwark'?15:11});
   }
   for(const e of room.enemies){
+    const tank=blockingTank(players,e.x,e.y);
+    if(tank){pushShieldBlock(room,tank,now);continue;}
     const dx=princess.x-e.x,dy=princess.y-e.y,d=Math.hypot(dx,dy)||1;
     if(e.type==='ranger'){if(d>365){e.x+=dx/d*e.speed*dt;e.y+=dy/d*e.speed*dt;}else if(d<250){e.x-=dx/d*e.speed*dt;e.y-=dy/d*e.speed*dt;}if(now>=e.attackAt&&d<680){e.attackAt=now+1900;room.enemyShots.push({id:++room.enemyShotSeq,type:'arrow',targetId:princess.id,x:e.x,y:e.y,vx:dx/d*260,vy:dy/d*260,life:2.5,damage:6});}}
     else {if(d>e.radius+12){e.x+=dx/d*e.speed*dt;e.y+=dy/d*e.speed*dt;}else if(now-e.damageAt> (e.type==='boss'?550:850)){e.damageAt=now;princess.hp=Math.max(0,princess.hp-(e.type==='boss'?14:7));if(!princess.hp){room.phase='over';announce(room,'姫が倒れてしまった…');}}
@@ -280,7 +292,7 @@ function tick(room, now) {
   room.projectiles=shots;
   room.effects=room.effects.filter(effect=>now-effect.createdAt<effect.duration);
   const enemyShots=[];
-  for(const shot of room.enemyShots){shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;const target=players.find(p=>p.id===shot.targetId);
+  for(const shot of room.enemyShots){const px=shot.x,py=shot.y;shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;const tank=players.find(p=>p.role==='knight'&&p.knightType==='tank'&&p.disabledUntil<=now&&segmentDistance(px,py,shot.x,shot.y,p.x,p.y)<=82);if(tank){pushShieldBlock(room,tank,now);continue;}const target=players.find(p=>p.id===shot.targetId);
     if(target&&Math.hypot(target.x-shot.x,target.y-shot.y)<18){if(shot.type==='seal'){target.disabledUntil=now+2600;announce(room,`${target.name}の武器が封じられた！`);}else if(target.role==='princess'){target.hp=Math.max(0,target.hp-shot.damage);if(!target.hp){room.phase='over';announce(room,'姫が倒れてしまった…');}}continue;}
     if(shot.life>0)enemyShots.push(shot);
   }
