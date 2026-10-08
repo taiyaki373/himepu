@@ -105,6 +105,7 @@ function renderState() {
   $('#controlsHint').innerHTML=me?.role==='princess'?'姫は移動なし <span class="separator">·</span> 照準＋クリック攻撃 <span class="separator">·</span> <kbd>Q</kbd> 加護':isMage?`<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 <span class="separator">·</span> <kbd>SPACE</kbd> 魔導弾（MP消費）`:me?.knightType==='tank'?`<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 <span class="separator">·</span> 大盾の近くで敵と弾を足止め`:`<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 <span class="separator">·</span> ${knightLabels[me?.knightType]||'ナイト'}攻撃オート`;
   if(pending!==upgradePending){upgradePending=pending;keyState={};lastInput='';syncInput();}
   const canAddBot=host&&state.players.length<5&&(state.phase==='lobby'||state.phase==='playing');
+  const tankTaken=state.players.some(p=>p.role==='knight'&&p.knightType==='tank'),botTankOption=$('#botKnightType').querySelector('[value="tank"]');if(botTankOption){botTankOption.disabled=tankTaken;if(tankTaken&&$('#botKnightType').value==='tank')$('#botKnightType').value='archer';}
   $('#botControls').classList.toggle('hidden',!canAddBot); $('#startBtn').classList.toggle('hidden',!canStart); $('#waitingNote').textContent=state.players.length<2?'テストBotを追加すると開始できます':host?'ゲームを開始できます':'ホストが開始するのを待っています';
   howToButton.classList.toggle('hidden',state.phase!=='lobby'); if(state.phase!=='lobby')closeHowTo();
   $('#lobbyOverlay').classList.toggle('hidden',state.phase!=='lobby'); $('#toast').textContent=state.message||'';

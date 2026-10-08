@@ -86,6 +86,7 @@ function makeRoom(code) { return { code, players: new Map(), enemies: [], projec
 function makeKnight({ id, peer = null, name, knightType = 'archer', isBot = false }) {
   return { id, peer, name, role: 'knight', knightType, isBot, x: 0, y: 0, facingX: 1, facingY: 0, hp: 100, maxHp: 100, mp: 100, maxMp: 100, lastAttack: 0, disabledUntil: 0, buffCooldownUntil: 0, input: { aimX: 1, aimY: 0 }, xp: 0, nextXp: 3, level: 1, pendingUpgrade: false, attackPower: 1, attackSpeed: 1, moveSpeed: 1 };
 }
+function hasTank(room) { return [...room.players.values()].some(player => player.role === 'knight' && player.knightType === 'tank'); }
 function addPlayer(peer, msg, room) {
   const code = String(msg.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
   if (!/^[A-Z0-9]{4,8}$/.test(code)) return send(peer, { type: 'error', text: '部屋コードは4〜8文字で入力してください' });
@@ -94,6 +95,7 @@ function addPlayer(peer, msg, room) {
   const id = Math.random().toString(36).slice(2, 9);
   const role = room.players.size === 0 ? 'princess' : 'knight';
   const knightType = Object.hasOwn(knightWeapons, msg.knightType) ? msg.knightType : 'archer';
+  if (role === 'knight' && knightType === 'tank' && hasTank(room)) return send(peer, { type: 'error', text: 'タンクは1ルームにつき1人までです' });
   const player = role === 'princess'
     ? { ...makeKnight({ id, peer, name: String(msg.name || 'プレイヤー').slice(0, 12), knightType }), role: 'princess' }
     : makeKnight({ id, peer, name: String(msg.name || 'プレイヤー').slice(0, 12), knightType });
@@ -105,6 +107,7 @@ function addPlayer(peer, msg, room) {
 
 function addBot(room, knightType = 'archer') {
   if (room.players.size >= 5) return false;
+  if (knightType === 'tank' && hasTank(room)) { announce(room, 'タンクは1ルームにつき1人までです'); return false; }
   const number = [...room.players.values()].filter(p => p.isBot).length + 1;
   const bot = makeKnight({ id: `bot-${Date.now()}-${number}`, name: `守護Bot ${number}`, knightType: Object.hasOwn(knightWeapons, knightType) ? knightType : 'archer', isBot: true });
   if (room.phase === 'playing') {
