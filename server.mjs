@@ -45,13 +45,21 @@ function segmentHitsEnemy(x1,y1,x2,y2,enemy) {
   const box=enemyHitbox(enemy);
   return segmentDistance(x1/box.x,y1/box.y,x2/box.x,y2/box.y,enemy.x/box.x,enemy.y/box.y)<=1;
 }
-function blockingTank(players, x, y) {
-  return players.find(p => p.role === 'knight' && p.knightType === 'tank' && p.disabledUntil <= Date.now() && Math.hypot(p.x-x,p.y-y) <= 150);
+function blockingTank(players, x, y, now) {
+  return players.find(p => p.role === 'knight' && p.knightType === 'tank' && p.shieldHp > 0 && p.disabledUntil <= now && Math.hypot(p.x-x,p.y-y) <= 150);
 }
 function pushShieldBlock(room, tank, now) {
   if ((tank.lastShieldBlockAt||0) > now-180) return;
   tank.lastShieldBlockAt=now;
   room.effects.push({type:'shieldBlock',x:tank.x,y:tank.y,createdAt:now,duration:260,radius:92});
+}
+function damageShield(room, tank, now) {
+  if (tank.shieldHp <= 0) return;
+  tank.shieldHp -= 1; pushShieldBlock(room,tank,now);
+  if (tank.shieldHp > 0) { announce(room, `${tank.name}が盾で防いだ！ 残り${tank.shieldHp}回`); return; }
+  const x=(Math.random()-.5)*1400,y=(Math.random()-.5)*1400;
+  room.shieldRepairs.push({id:++room.repairSeq,x,y});
+  announce(room, `${tank.name}の盾が壊れた！マップ内の修理キットを拾おう`);
 }
 
 const http = createServer(async (req, res) => {
@@ -78,13 +86,13 @@ function send(peer, message) {
 
 function snapshot(room) {
   const now = Date.now();
-  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, isBot: !!p.isBot, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, mp: p.mp, maxMp: p.maxMp, mpCost: knightWeapons[p.knightType]?.mpCost||0, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), attackFlashUntil: p.attackFlashUntil||0, attackAxis: p.attackAxis||null, attackFacingX: Number.isFinite(p.attackFacingX)?p.attackFacingX:(Number.isFinite(p.facingX)?p.facingX:1), attackFacingY: Number.isFinite(p.attackFacingY)?p.attackFacingY:(Number.isFinite(p.facingY)?p.facingY:0), facingX: Number.isFinite(p.facingX)?p.facingX:1, facingY: Number.isFinite(p.facingY)?p.facingY:0, aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0, aimDistance: Number.isFinite(p.input.aimDistance)?p.input.aimDistance:220 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, effects: room.effects, message: room.message };
+  return { type: 'state', room: room.code, phase: room.phase, wave: room.wave, time: room.waveTime, buffActive: room.buffUntil > now, players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, role: p.role, knightType: p.knightType, isBot: !!p.isBot, x: p.x, y: p.y, hp: p.hp, maxHp: p.maxHp, shieldHp: p.shieldHp ?? 10, mp: p.mp, maxMp: p.maxMp, mpCost: knightWeapons[p.knightType]?.mpCost||0, xp: p.xp, nextXp: p.nextXp, level: p.level, pendingUpgrade: p.pendingUpgrade, disabled: p.disabledUntil > now, disabledFor: Math.max(0, p.disabledUntil-now), buffCooldown: Math.max(0, p.buffCooldownUntil-now), attackFlashUntil: p.attackFlashUntil||0, attackAxis: p.attackAxis||null, attackFacingX: Number.isFinite(p.attackFacingX)?p.attackFacingX:(Number.isFinite(p.facingX)?p.facingX:1), attackFacingY: Number.isFinite(p.attackFacingY)?p.attackFacingY:(Number.isFinite(p.facingY)?p.facingY:0), facingX: Number.isFinite(p.facingX)?p.facingX:1, facingY: Number.isFinite(p.facingY)?p.facingY:0, aimX: Number.isFinite(p.input.aimX)?p.input.aimX:1, aimY: Number.isFinite(p.input.aimY)?p.input.aimY:0, aimDistance: Number.isFinite(p.input.aimDistance)?p.input.aimDistance:220 })), enemies: room.enemies, projectiles: room.projectiles, enemyShots: room.enemyShots, xpOrbs: room.xpOrbs, shieldRepairs: room.shieldRepairs, effects: room.effects, message: room.message };
 }
 function broadcast(room) { const state = snapshot(room); for (const p of room.players.values()) send(p.peer, state); }
 function announce(room, message) { room.message = message; }
-function makeRoom(code) { return { code, players: new Map(), enemies: [], projectiles: [], enemyShots: [], xpOrbs: [], effects: [], phase: 'lobby', wave: 0, waveTime: 0, waveStartedAt: 0, buffUntil: 0, buffCooldownUntil: 0, buffDurationMultiplier: 1, knightXpMultiplier: 1, knightDamageMultiplier: 1, bossSpawned: false, message: '仲間を待っています', lastSpawn: 0, lastTick: Date.now(), seq: 0, projectileSeq: 0, enemyShotSeq: 0, orbSeq: 0 }; }
+function makeRoom(code) { return { code, players: new Map(), enemies: [], projectiles: [], enemyShots: [], xpOrbs: [], shieldRepairs: [], effects: [], phase: 'lobby', wave: 0, waveTime: 0, waveStartedAt: 0, buffUntil: 0, buffCooldownUntil: 0, buffDurationMultiplier: 1, knightXpMultiplier: 1, knightDamageMultiplier: 1, bossSpawned: false, message: '仲間を待っています', lastSpawn: 0, lastTick: Date.now(), seq: 0, projectileSeq: 0, enemyShotSeq: 0, orbSeq: 0, repairSeq: 0 }; }
 function makeKnight({ id, peer = null, name, knightType = 'archer', isBot = false }) {
-  return { id, peer, name, role: 'knight', knightType, isBot, x: 0, y: 0, facingX: 1, facingY: 0, hp: 100, maxHp: 100, mp: 100, maxMp: 100, lastAttack: 0, disabledUntil: 0, buffCooldownUntil: 0, input: { aimX: 1, aimY: 0 }, xp: 0, nextXp: 3, level: 1, pendingUpgrade: false, attackPower: 1, attackSpeed: 1, moveSpeed: 1 };
+  return { id, peer, name, role: 'knight', knightType, isBot, x: 0, y: 0, facingX: 1, facingY: 0, hp: 100, maxHp: 100, shieldHp: 10, mp: 100, maxMp: 100, lastAttack: 0, disabledUntil: 0, buffCooldownUntil: 0, input: { aimX: 1, aimY: 0 }, xp: 0, nextXp: 3, level: 1, pendingUpgrade: false, attackPower: 1, attackSpeed: 1, moveSpeed: 1 };
 }
 function hasTank(room) { return [...room.players.values()].some(player => player.role === 'knight' && player.knightType === 'tank'); }
 function addPlayer(peer, msg, room) {
@@ -122,8 +130,8 @@ function addBot(room, knightType = 'archer') {
 function startGame(room) {
   if (room.phase !== 'lobby' || room.players.size < 2) return;
   const now = Date.now();
-  room.phase = 'playing'; room.wave = 1; room.waveTime = 30; room.waveStartedAt = now; room.enemies = []; room.projectiles = []; room.enemyShots = []; room.xpOrbs = []; room.effects = []; room.lastSpawn = now; room.lastTick = now; room.bossSpawned = false; room.buffUntil = 0; room.buffCooldownUntil = 0; room.buffDurationMultiplier = 1; room.knightXpMultiplier = 1; room.knightDamageMultiplier = 1;
-  for (const p of room.players.values()) { p.hp = 100; p.mp = p.maxMp; p.lastAttack = 0; p.facingX = 1; p.facingY = 0; p.x = p.role==='princess'?0:(Math.random()-.5)*180; p.y = p.role==='princess'?0:(Math.random()-.5)*180; p.xp = 0; p.nextXp = 3; p.level = 1; p.pendingUpgrade = false; p.attackPower = 1; p.attackSpeed = 1; p.moveSpeed = 1; p.disabledUntil = 0; p.buffCooldownUntil = 0; p.input = { aimX: 1, aimY: 0 }; }
+  room.phase = 'playing'; room.wave = 1; room.waveTime = 30; room.waveStartedAt = now; room.enemies = []; room.projectiles = []; room.enemyShots = []; room.xpOrbs = []; room.shieldRepairs = []; room.effects = []; room.lastSpawn = now; room.lastTick = now; room.bossSpawned = false; room.buffUntil = 0; room.buffCooldownUntil = 0; room.buffDurationMultiplier = 1; room.knightXpMultiplier = 1; room.knightDamageMultiplier = 1;
+  for (const p of room.players.values()) { p.hp = 100; p.shieldHp = 10; p.mp = p.maxMp; p.lastAttack = 0; p.lastShieldBlockAt = 0; p.facingX = 1; p.facingY = 0; p.x = p.role==='princess'?0:(Math.random()-.5)*180; p.y = p.role==='princess'?0:(Math.random()-.5)*180; p.xp = 0; p.nextXp = 3; p.level = 1; p.pendingUpgrade = false; p.attackPower = 1; p.attackSpeed = 1; p.moveSpeed = 1; p.disabledUntil = 0; p.buffCooldownUntil = 0; p.input = { aimX: 1, aimY: 0 }; }
   announce(room, 'WAVE 1 / 5 — 姫を守れ！');
 }
 
@@ -269,8 +277,8 @@ function tick(room, now) {
     room.enemies.push({id:++room.seq,type,x:princess.x+Math.cos(angle)*distance,y:princess.y+Math.sin(angle)*distance,hp,maxHp:hp,speed,damageAt:0,attackAt:now+1100,radius:type==='disruptor'||type==='bulwark'?15:11});
   }
   for(const e of room.enemies){
-    const tank=blockingTank(players,e.x,e.y);
-    if(tank){pushShieldBlock(room,tank,now);continue;}
+    const tank=blockingTank(players,e.x,e.y,now);
+    if(tank){const cooldown=e.type==='ranger'?1900:e.type==='boss'?550:850;if(now-(e.damageAt||0)>cooldown){e.damageAt=now;damageShield(room,tank,now);}continue;}
     const dx=princess.x-e.x,dy=princess.y-e.y,d=Math.hypot(dx,dy)||1;
     if(e.type==='ranger'){if(d>365){e.x+=dx/d*e.speed*dt;e.y+=dy/d*e.speed*dt;}else if(d<250){e.x-=dx/d*e.speed*dt;e.y-=dy/d*e.speed*dt;}if(now>=e.attackAt&&d<680){e.attackAt=now+1900;room.enemyShots.push({id:++room.enemyShotSeq,type:'arrow',targetId:princess.id,x:e.x,y:e.y,vx:dx/d*260,vy:dy/d*260,life:2.5,damage:6});}}
     else {if(d>e.radius+12){e.x+=dx/d*e.speed*dt;e.y+=dy/d*e.speed*dt;}else if(now-e.damageAt> (e.type==='boss'?550:850)){e.damageAt=now;princess.hp=Math.max(0,princess.hp-(e.type==='boss'?14:7));if(!princess.hp){room.phase='over';announce(room,'姫が倒れてしまった…');}}
@@ -295,11 +303,12 @@ function tick(room, now) {
   room.projectiles=shots;
   room.effects=room.effects.filter(effect=>now-effect.createdAt<effect.duration);
   const enemyShots=[];
-  for(const shot of room.enemyShots){const px=shot.x,py=shot.y;shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;const tank=players.find(p=>p.role==='knight'&&p.knightType==='tank'&&p.disabledUntil<=now&&segmentDistance(px,py,shot.x,shot.y,p.x,p.y)<=82);if(tank){pushShieldBlock(room,tank,now);continue;}const target=players.find(p=>p.id===shot.targetId);
+  for(const shot of room.enemyShots){const px=shot.x,py=shot.y;shot.x+=shot.vx*dt;shot.y+=shot.vy*dt;shot.life-=dt;const tank=players.find(p=>p.role==='knight'&&p.knightType==='tank'&&p.shieldHp>0&&p.disabledUntil<=now&&segmentDistance(px,py,shot.x,shot.y,p.x,p.y)<=82);if(tank){damageShield(room,tank,now);continue;}const target=players.find(p=>p.id===shot.targetId);
     if(target&&Math.hypot(target.x-shot.x,target.y-shot.y)<18){if(shot.type==='seal'){target.disabledUntil=now+2600;announce(room,`${target.name}の武器が封じられた！`);}else if(target.role==='princess'){target.hp=Math.max(0,target.hp-shot.damage);if(!target.hp){room.phase='over';announce(room,'姫が倒れてしまった…');}}continue;}
     if(shot.life>0)enemyShots.push(shot);
   }
   room.enemyShots=enemyShots;
+  for(const repair of [...room.shieldRepairs]){const tank=players.find(p=>p.role==='knight'&&p.knightType==='tank'&&Math.hypot(p.x-repair.x,p.y-repair.y)<55);if(!tank)continue;tank.shieldHp=10;room.shieldRepairs=room.shieldRepairs.filter(item=>item!==repair);announce(room,`${tank.name}が修理キットを拾った！盾が完全に回復`);}
   for(const orb of [...room.xpOrbs]){const collector=players.filter(p=>!p.pendingUpgrade&&Math.hypot(p.x-orb.x,p.y-orb.y)<30).sort((a,b)=>Math.hypot(a.x-orb.x,a.y-orb.y)-Math.hypot(b.x-orb.x,b.y-orb.y))[0];if(!collector)continue;room.xpOrbs=room.xpOrbs.filter(item=>item!==orb);const amount=orb.value*(collector.role==='knight'?room.knightXpMultiplier:1);announce(room,`${collector.name}が経験値を取得！姫にも経験値が届いた`);gainXp(room,collector,amount);if(collector.role==='knight')gainXp(room,princess,amount*.5);}
 }
 
